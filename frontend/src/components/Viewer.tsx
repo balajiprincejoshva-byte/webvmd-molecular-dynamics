@@ -1296,6 +1296,9 @@ export default function Viewer({ datasetId }: Props) {
                 {pocketExplorerAuth ? 'Exit Pkt.' : 'Isol. Pocket'}
               </button>
             </div>
+            <div className={`mt-1.5 text-[10px] italic ${uiTheme === 'aerogel' ? 'text-amber-400/80' : 'text-amber-600'}`}>
+              * Changing Mode (Auto/Points/Spheres/Surface) only updates visual geometry if you Start Stream or hit Play.
+            </div>
         </div>
         <div className={`absolute bottom-3 left-3 p-2 rounded flex items-center gap-3 ${panel.className}`} style={panel.style}>
           <input
