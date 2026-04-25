@@ -1,5 +1,7 @@
 <div align="center">
   
+🔴 **Live Demo:** [https://webvmd-platform.vercel.app](https://webvmd-platform.vercel.app) *(note: replace with actual live URL when hosting)*
+
 # 🧬 WebVMD: Molecular Dynamics in the Browser
 **A High-Performance Computational Biology Visualization Platform**
 

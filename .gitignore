@@ -11,3 +11,4 @@ __pycache__/
 backend/sample_data/
 venv/
 backend/venv/
+backend/app/sample_data/

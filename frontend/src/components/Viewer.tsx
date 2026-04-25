@@ -30,7 +30,7 @@ export default function Viewer({ datasetId }: Props) {
   const [atoms, setAtoms] = useState<any[] | null>(null)
   const [frameIndex, setFrameIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
-  const [mode, setMode] = useState<'auto' | 'points' | 'spheres'>('auto')
+  const [mode, setMode] = useState<'auto' | 'points' | 'spheres' | 'surface'>('auto')
   // coloring and highlighting
   const [colorMode, setColorMode] = useState<'element' | 'chain' | 'residue' | 'uniform'>('element')
   const [highlightResidue, setHighlightResidue] = useState<boolean>(true)
@@ -62,6 +62,7 @@ export default function Viewer({ datasetId }: Props) {
   const wsRef = useRef<WebSocket | null>(null)
   const pendingMetaRef = useRef<Array<any>>([])
   const [streaming, setStreaming] = useState(false)
+  const dynamicMaskRef = useRef<Uint8Array | null>(null)
 
   function showToast(msg: string) {
     const id = (toastIdRef.current = toastIdRef.current + 1)
@@ -185,7 +186,7 @@ export default function Viewer({ datasetId }: Props) {
       const qFrame = router.query.frame ? Number(router.query.frame) : 0
       const qMode = router.query.mode ? String(router.query.mode) : undefined
       const qSelect = router.query.select ? String(router.query.select) : undefined
-      if (qMode && (qMode === 'points' || qMode === 'spheres' || qMode === 'auto')) setMode(qMode as any)
+      if (qMode && (qMode === 'points' || qMode === 'spheres' || qMode === 'surface' || qMode === 'auto')) setMode(qMode as any)
       if (qSelect) {
         const parts = qSelect.split(',').map((p) => Number(p)).filter((v) => !Number.isNaN(v))
         selectedIndicesRef.current = parts.slice(0, 2)
@@ -285,11 +286,11 @@ export default function Viewer({ datasetId }: Props) {
     function createObjects(atomCount: number) {
       // decide rendering mode
       const threshold = 5000
-      const useSpheres = mode === 'spheres' || (mode === 'auto' && atomCount <= threshold)
+      const useSpheres = mode === 'spheres' || mode === 'surface' || (mode === 'auto' && atomCount <= threshold)
       if (useSpheres) {
-        const radius = 0.9
+        const radius = mode === 'surface' ? 1.8 : 0.9
         const geom = new THREE.SphereGeometry(radius, 12, 12)
-        const mat = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.0 })
+        const mat = new THREE.MeshStandardMaterial({ roughness: mode === 'surface' ? 0.9 : 0.7, metalness: 0.0 })
         instancedMesh = new THREE.InstancedMesh(geom, mat, atomCount)
         // support per-instance color if needed later
         instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
@@ -532,8 +533,9 @@ export default function Viewer({ datasetId }: Props) {
     const pts = pointsRef.current
 
     let currentMask = visibilityRef.current
+    let dynamicMask: Uint8Array | null = null
     if (pocketExplorerAuth && selectedResidue != null && atoms) {
-      const dynamicMask = new Uint8Array(atoms.length)
+      dynamicMask = new Uint8Array(atoms.length)
       let cx = 0, cy = 0, cz = 0, rcount = 0
       for(let i=0; i<atoms.length; i++) {
         if (atoms[i].residue_id === selectedResidue) {
@@ -546,8 +548,16 @@ export default function Viewer({ datasetId }: Props) {
           const dx = floats[i*3] - cx, dy = floats[i*3+1] - cy, dz = floats[i*3+2] - cz
           dynamicMask[i] = (dx*dx+dy*dy+dz*dz) < 64 ? 1 : 0
         }
-        currentMask = dynamicMask
       }
+    }
+    
+    // Pass dynamic mask to colors
+    if (dynamicMask) {
+      dynamicMaskRef.current = dynamicMask
+      applyColors(buildPerAtomColors())
+    } else if (dynamicMaskRef.current && !dynamicMask) {
+      dynamicMaskRef.current = null
+      applyColors(buildPerAtomColors())
     }
 
     if (pts) {
@@ -633,8 +643,35 @@ export default function Viewer({ datasetId }: Props) {
     for (let i = 0; i < n; i++) {
       const a = atoms[i]
       const element = (a.element || 'C').toUpperCase()
+      const resName = (a.residue_name || '').toUpperCase()
       let hex = 0x66a3ff
-      if (colorMode === 'element') {
+      if (mode === 'surface' && colorMode === 'element') {
+        let charge = 0
+        if (element === 'O') charge = -0.4
+        else if (element === 'N') charge = 0.4
+        if (resName === 'ASP' || resName === 'GLU') {
+          if (element === 'O') charge = -1.0
+        } else if (resName === 'ARG' || resName === 'LYS' || resName === 'HIS') {
+          if (element === 'N') charge = 1.0
+        }
+        if (charge < 0) {
+           const t = Math.min(-charge / 0.4, 1.0)
+           if (t < 0.5) {
+               hex = new THREE.Color(0xffffff).lerp(new THREE.Color(0xff9999), t * 2).getHex()
+           } else {
+               hex = new THREE.Color(0xff9999).lerp(new THREE.Color(0xcc0000), (t - 0.5) * 2).getHex()
+           }
+        } else if (charge > 0) {
+           const t = Math.min(charge / 0.4, 1.0)
+           if (t < 0.5) {
+               hex = new THREE.Color(0xffffff).lerp(new THREE.Color(0x99ccff), t * 2).getHex()
+           } else {
+               hex = new THREE.Color(0x99ccff).lerp(new THREE.Color(0x0000cc), (t - 0.5) * 2).getHex()
+           }
+        } else {
+           hex = 0xffffff
+        }
+      } else if (colorMode === 'element') {
         hex = ELEMENT_COLORS[element] ?? 0x66a3ff
       } else if (colorMode === 'chain') {
         const c = a.chain_id || 'A'
@@ -647,10 +684,14 @@ export default function Viewer({ datasetId }: Props) {
       }
 
       const col = new THREE.Color(hex)
-      // apply residue highlight dimming
-      if (highlightResidue && selectedResidue != null) {
+      
+      const dynMask = dynamicMaskRef.current
+      if (dynMask) {
+         if (dynMask[i] === 0) {
+            col.lerp(new THREE.Color(uiTheme === 'aerogel' ? 0x222222 : 0xcccccc), 0.85)
+         }
+      } else if (highlightResidue && selectedResidue != null) {
         if (a.residue_id === selectedResidue) {
-          // keep color but brighten slightly
           col.offsetHSL(0, 0, 0.1)
         } else {
           col.lerp(new THREE.Color(0x999999), 0.7)
@@ -846,7 +887,7 @@ export default function Viewer({ datasetId }: Props) {
     const colors = buildPerAtomColors()
     applyColors(colors)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [atoms, colorMode, highlightResidue, selectedResidue, chainColorMap, residueColorMap, uiTheme])
+  }, [atoms, colorMode, highlightResidue, selectedResidue, chainColorMap, residueColorMap, uiTheme, mode, pocketExplorerAuth])
 
   // compute chain and residue lists and color maps when atoms change
   useEffect(() => {
@@ -1005,6 +1046,15 @@ export default function Viewer({ datasetId }: Props) {
   function buildLegendEntries() {
     const entries: Array<any> = []
     if (!atoms) return entries
+    
+    if (mode === 'surface' && colorMode === 'element') {
+      entries.push({ label: 'Electrostatic Potential (approx.)', color: '#ffffff' })
+      entries.push({ label: 'Negative (-0.4)', color: '#cc0000' })
+      entries.push({ label: 'Neutral (0.0)', color: '#ffffff' })
+      entries.push({ label: 'Positive (+0.4)', color: '#0000cc' })
+      return entries
+    }
+
     if (colorMode === 'element') {
       const counts: Record<string, number> = {}
       for (const a of atoms) counts[a.element] = (counts[a.element] || 0) + 1
@@ -1224,9 +1274,16 @@ export default function Viewer({ datasetId }: Props) {
             <button onClick={() => (streaming ? stopStream() : startStream())} className={`px-2 py-1 ${streaming ? 'bg-red-400 text-white' : 'bg-emerald-500 text-white'} rounded`}>{streaming ? 'Stop stream' : 'Start stream'}</button>
           </div>
             <div className="mt-2 flex items-center gap-2">
-              <label className="text-xs">Color:</label>
+              <label className="text-xs">Mode:</label>
+              <select value={mode} onChange={(e) => setMode(e.target.value as any)} className={`text-xs border rounded px-1 py-1 ${panel.inputBg}`}>
+                <option value="auto">Auto</option>
+                <option value="points">Points</option>
+                <option value="spheres">Spheres</option>
+                <option value="surface">Surface</option>
+              </select>
+              <label className="text-xs ml-2">Color:</label>
               <select value={colorMode} onChange={(e) => setColorMode(e.target.value as any)} className={`text-xs border rounded px-2 py-1 ${panel.inputBg}`}>
-                <option value="element">By element</option>
+                <option value="element">{mode === 'surface' ? 'Electrostatic (approx.)' : 'By element'}</option>
                 <option value="chain">By chain</option>
                 <option value="residue">By residue</option>
                 <option value="uniform">Uniform</option>
@@ -1330,7 +1387,6 @@ export default function Viewer({ datasetId }: Props) {
         </div>
         <div className="mt-2 text-xs text-gray-600 grid grid-cols-2 gap-2">
           <div>Cached frames: {Array.from(cacheRef.current.keys()).length}</div>
-          <div>Render mode: {mode}</div>
           <div>Cached load avg: {Math.round(statsRef.current.cachedAvgMs || 0)} ms</div>
           <div>Network load avg: {Math.round(statsRef.current.networkAvgMs || 0)} ms</div>
           <div>Estimated memory: {Math.round(((metadata?.n_atoms || 0) * 3 * 4 * (Array.from(cacheRef.current.keys()).length || 1)) / (1024 * 1024))} MB</div>

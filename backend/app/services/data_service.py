@@ -26,12 +26,9 @@ class DatasetManager:
         self._universe_cache: Dict[str, object] = {}
 
     def ensure_sample_datasets(self):
-        # Create three sample datasets of increasing size if missing
-        # Create sample datasets representing biological systems
+        # Create one small synthetic fallback dataset for tests and offline development
         samples = [
-            ("AlphaFold3_Predicted_Kinase", 1200, 80),
-            ("GPCR_Lipid_Bilayer_Simulation", 4500, 120),
-            ("SARS_CoV_2_Spike_Antibody_Complex", 14000, 80),
+            ("Synthetic_Fallback_Dataset", 800, 50),
         ]
         for name, n_atoms, n_frames in samples:
             ds_dir = self.base / name
